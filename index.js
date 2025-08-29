@@ -161,3 +161,17 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server started on", PORT);
 });
+// Webhook verification
+app.get("/wa", (req, res) => {
+  const verifyToken = "waibiz123"; // तू Render वर टाकलेला
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  
+  if (mode && token && mode === "subscribe" && token === verifyToken) {
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
