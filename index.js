@@ -1,177 +1,101 @@
-// Wai Business Pro — Fuzzy WhatsApp Auto-Reply (Web API)
-// Minimal Express server with fuzzy-matching replies.
-// Author: Vitthal Jiddimani
+// index.js
+// WhatsApp Cloud API Webhook + Auto-Reply (with simple fuzzy matching)
 
 const express = require("express");
+const bodyParser = require("body-parser");
+const axios = require("axios");
+
 const app = express();
+app.use(bodyParser.json());
 
-app.use(express.json());
-
-// ---- Health / Home (Uptime check) ----
-app.get("/", (_req, res) => {
-  res.send("Wai Business Pro Fuzzy Auto-Reply is Running! ✅");
-});
-
-// ---- Domain knowledge (Marathi + English mix) ----
-const KB = [
-  {
-    tag: "pricing",
-    patterns: [
-      "किंमत", "किमती", "प्राईस", "price", "charges", "किती पैसे", "rate"
-    ],
-    replies: [
-      "लिस्टिंग फी फक्त ₹99 — फोटो, लोकेशन, वेळा, कॉल/व्हॉट्सअप बटण सगळं!",
-      "₹99 बेसिक लिस्टिंग. अपग्रेड्स हवे असतील तर नंतर add करू शकतो."
-    ],
-  },
-  {
-    tag: "howto",
-    patterns: [
-      "कसे करायचे", "how to", "process", "steps", "join", "लिस्टिंग कसं", "register"
-    ],
-    replies: [
-      "Add Listing वर क्लिक करा → तपशील भरा → ₹99 पेमेंट → तुमची लिस्ट ऑटो-पब्लिश!",
-      "प्रोसेस: नाव/पत्ता/फोटो → Razorpay ₹99 → लगेच लाईव्ह. मदत हवी तर 'help' टाईप करा."
-    ],
-  },
-  {
-    tag: "support",
-    patterns: ["help", "सपोर्ट", "संपर्क", "contact", "issue", "problem", "मदत"],
-    replies: [
-      "सपोर्ट: waibusinesspro360@gmail.com — 24x7 ईमेल. त्वरित मदतीसाठी 'HELP NOW' लिहा.",
-      "तुमचा प्रश्न पाठवा, आम्ही लगेच उत्तर देऊ. 📩 waibusinesspro360@gmail.com"
-    ],
-  },
-  {
-    tag: "hours",
-    patterns: ["वेळ", "timings", "hours", "open", "closing time", "कधी उघडते"],
-    replies: [
-      "डिरेक्टरी 24x7 ऑनलाइन आहे. व्यवसायांचे वेळा त्यांच्या पेजवर दिलेले असतात.",
-    ],
-  },
-  {
-    tag: "greeting",
-    patterns: ["hi", "hello", "नमस्कार", "हॅलो", "hey", "काय रे"],
-    replies: [
-      "नमस्कार! 👋 Wai Business Pro मध्ये स्वागत आहे. काय मदत करू?",
-      "Hello! How can I help you with your business listing today?"
-    ],
-  },
-];
-
-// ---- Utility: normalize + simple fuzzy score (token overlap + levenshtein-lite) ----
-const norm = s =>
-  (s || "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-function tokenOverlapScore(a, b) {
-  const A = new Set(norm(a).split(" "));
-  const B = new Set(norm(b).split(" "));
-  if (!A.size || !B.size) return 0;
-  let hit = 0;
-  for (const t of A) if (B.has(t)) hit++;
-  return hit / Math.max(A.size, B.size);
-}
-
-function lev(a, b) {
-  a = norm(a); b = norm(b);
-  const m = a.length, n = b.length;
-  if (!m && !n) return 1;
-  const dp = Array(n + 1).fill(0);
-  for (let j = 0; j <= n; j++) dp[j] = j;
-  for (let i = 1; i <= m; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const tmp = dp[j];
-      dp[j] = Math.min(
-        dp[j] + 1,
-        dp[j - 1] + 1,
-        prev + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-      prev = tmp;
-    }
-  }
-  const dist = dp[n];
-  const maxLen = Math.max(m, n) || 1;
-  return 1 - dist / maxLen; // 0..1 (1 is exact)
-}
-
-function fuzzyBestMatch(text) {
-  let best = { tag: null, score: 0 };
-  for (const item of KB) {
-    for (const pat of item.patterns) {
-      const s = Math.max(
-        tokenOverlapScore(text, pat),
-        lev(text, pat)
-      );
-      if (s > best.score) best = { tag: item.tag, score: s };
-    }
-  }
-  return best;
-}
-
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-// ---- API: POST /wa  { text: "...", from?: "9198..." }
-app.post("/wa", (req, res) => {
-  const text = (req.body && req.body.text) || "";
-  const from = (req.body && req.body.from) || "user";
-  const q = text.trim();
-
-  if (!q) {
-    return res.json({
-      ok: true,
-      to: from,
-      reply:
-        "नमस्कार! तुमचा मेसेज रिकामा आला. कृपया प्रश्न लिहा — उदा. 'प्राईस काय?'",
-    });
-  }
-
-  const { tag, score } = fuzzyBestMatch(q);
-
-  // जर स्कोअर कमी असेल तर generic fallback
-  if (!tag || score < 0.42) {
-    return res.json({
-      ok: true,
-      to: from,
-      reply:
-        "समजलं. कृपया थोडं स्पष्ट लिहाल का? (उदा. 'किंमत', 'कसे करायचे', 'सपोर्ट').",
-      intentScore: Number(score.toFixed(2)),
-    });
-  }
-
-  const found = KB.find(x => x.tag === tag);
-  return res.json({
-    ok: true,
-    to: from,
-    tag,
-    intentScore: Number(score.toFixed(2)),
-    reply: pick(found.replies),
-  });
-});
-
-// ---- Start (Render uses PORT env) ----
+// ====== CONFIG (env) ======
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Server started on", PORT);
-});
-// Webhook verification
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "vithoba@9044"; // Facebook मध्ये जे टाकशील तेच
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;               // Permanent/Long-Lived token
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;             // WABA phone number id
+
+// ====== Helpers ======
+async function sendText(to, body) {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    console.error("❌ WHATSAPP_TOKEN/PHONE_NUMBER_ID missing");
+    return;
+  }
+  const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body }
+  };
+  await axios.post(url, payload, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    }
+  });
+}
+
+// अतिशय सोपी fuzzy logic (keywords → reply)
+function fuzzyReply(userText) {
+  const t = (userText || "").toLowerCase();
+
+  const intents = [
+    { k: ["hi", "hello", "namaste", "नमस्कार", "हॅलो"], r: "नमस्कार! मी तुमचा WhatsApp सहाय्यक. कशी मदत करू?" },
+    { k: ["price", "rates", "किंमत", "भाव", "charges"], r: "आमचे बेसिक प्लॅन फ्री, प्रीमियम प्लॅन नंतर ठरवू. तुम्हाला कोणता हवा?" },
+    { k: ["help", "मदत", "support"], r: "तुमचा प्रश्न टाका—मी लगेच उत्तर देतो." },
+    { k: ["timing", "वेळ", "working"], r: "आमची सेवा 24x7 उपलब्ध आहे. 🙂" },
+  ];
+
+  for (const it of intents) {
+    if (it.k.some(k => t.includes(k))) return it.r;
+  }
+
+  // default smart fallback
+  return `तुमचा मेसेज मिळाला: “${userText}”.\nमी समजून घेऊन मदत करतो. कृपया थोडक्यात काय हवं ते सांगा.`;
+}
+
+// ====== Routes ======
+
+// health
+app.get("/", (_req, res) => res.send("Wai Business Pro Fuzzy Auto-Reply is Running! ✅"));
+
+// META verification
 app.get("/wa", (req, res) => {
-  const verifyToken = "waibiz123"; // तू Render वर टाकलेला
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  
-  if (mode && token && mode === "subscribe" && token === verifyToken) {
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("✅ Webhook verified");
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// receive messages
+app.post("/wa", async (req, res) => {
+  try {
+    // Meta ला पटकन 200 द्यायचा—मग reply logic चालू
+    res.sendStatus(200);
+
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const messages = change?.value?.messages;
+    if (!messages || !messages[0]) return;
+
+    const msg = messages[0];
+    const from = msg.from;                       // user's whatsapp number (MSISDN)
+    const userText = msg.text?.body || "";
+
+    console.log("📩 Incoming:", { from, userText });
+
+    const reply = fuzzyReply(userText);
+    await sendText(from, reply);
+    console.log("📤 Replied:", reply);
+  } catch (e) {
+    console.error("Webhook error:", e?.response?.data || e.message);
   }
 });
 
+// start
+app.listen(PORT, () => console.log(`✅ Server started on ${PORT}`));
